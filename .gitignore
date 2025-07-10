@@ -1,0 +1,2 @@
+# ignore local test audio files
+pychorus/tests/local_data

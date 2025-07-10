@@ -54,10 +54,7 @@ def detect_lines_helper(denoised_time_lag, rows, threshold,
 
 def count_overlapping_lines(lines, margin, min_length_samples):
     """Look at all pairs of lines and see which ones overlap vertically and diagonally"""
-    line_scores = {}
-    for line in lines:
-        line_scores[line] = 0
-
+    line_scores = {line: 0 for line in lines}
     # Iterate over all pairs of lines
     for line_1 in lines:
         for line_2 in lines:
@@ -66,27 +63,20 @@ def count_overlapping_lines(lines, margin, min_length_samples):
                 line_2.start < (line_1.start + margin)) and (
                     line_2.end > (line_1.end - margin)) and (
                         abs(line_2.lag - line_1.lag) > min_length_samples)
-
             lines_overlap_diagonally = (
                 (line_2.start - line_2.lag) < (line_1.start - line_1.lag + margin)) and (
                     (line_2.end - line_2.lag) > (line_1.end - line_1.lag - margin)) and (
                         abs(line_2.lag - line_1.lag) > min_length_samples)
-
             if lines_overlap_vertically or lines_overlap_diagonally:
                 line_scores[line_1] += 1
-
     return line_scores
 
 
-def best_segment(line_scores):
-    """Return the best line, sorted first by chorus matches, then by duration"""
-    lines_to_sort = []
-    for line in line_scores:
-        lines_to_sort.append((line, line_scores[line], line.end - line.start))
-
+def best_segments(line_scores, top_n=1):
+    """Return the best lines, sorted first by chorus matches, then by duration"""
+    lines_to_sort = [(line, score, line.end - line.start) for line, score in line_scores.items()]
     lines_to_sort.sort(key=lambda x: (x[1], x[2]), reverse=True)
-    best_tuple = lines_to_sort[0]
-    return best_tuple[0]
+    return [line for line, _, _ in lines_to_sort[:top_n]]
 
 
 def draw_lines(num_samples, sample_rate, lines):
@@ -123,7 +113,7 @@ def create_chroma(input_file, n_fft=N_FFT):
     return chroma, y, sr, song_length_sec
 
 
-def find_chorus(chroma, sr, song_length_sec, clip_length):
+def find_chorus(chroma, sr, song_length_sec, clip_length, top_n=1):
     """
     Find the most repeated chorus
 
@@ -132,8 +122,9 @@ def find_chorus(chroma, sr, song_length_sec, clip_length):
         sr: sample rate of the song, usually 22050
         song_length_sec: length in seconds of the song (lost in processing chroma)
         clip_length: minimum length in seconds we want our chorus to be (at least 10-15s)
+        top_n: Number of choruses we want to return
 
-    Returns: Time in seconds of the start of the best chorus
+    Returns: Time in seconds of the start of the best choruses
     """
     num_samples = chroma.shape[1]
 
@@ -143,25 +134,23 @@ def find_chorus(chroma, sr, song_length_sec, clip_length):
     # Denoise the time lag matrix
     chroma_sr = num_samples / song_length_sec
     smoothing_size_samples = int(SMOOTHING_SIZE_SEC * chroma_sr)
-    time_lag_similarity.denoise(time_time_similarity.matrix,
-                                smoothing_size_samples)
+    time_lag_similarity.denoise(time_time_similarity.matrix, smoothing_size_samples)
 
     # Detect lines in the image
     clip_length_samples = clip_length * chroma_sr
     candidate_rows = local_maxima_rows(time_lag_similarity.matrix)
-    lines = detect_lines(time_lag_similarity.matrix, candidate_rows,
-                         clip_length_samples)
+    lines = detect_lines(time_lag_similarity.matrix, candidate_rows, clip_length_samples)
+
     if len(lines) == 0:
         print("No choruses were detected. Try a smaller search duration")
-        return None
-    line_scores = count_overlapping_lines(
-        lines, OVERLAP_PERCENT_MARGIN * clip_length_samples,
-        clip_length_samples)
-    best_chorus = best_segment(line_scores)
-    return best_chorus.start / chroma_sr
+        return []
+    line_scores = count_overlapping_lines(lines, OVERLAP_PERCENT_MARGIN * clip_length_samples, clip_length_samples)
+    top_segments = best_segments(line_scores, top_n=top_n)
+    
+    return [line.start / chroma_sr for line in top_segments]
 
 
-def find_and_output_chorus(input_file, output_file, clip_length=15):
+def find_and_output_chorus(input_file, output_file, clip_length=15, top_n=1):
     """
     Finds the most repeated chorus from input_file and outputs to output file.
 
@@ -170,20 +159,21 @@ def find_and_output_chorus(input_file, output_file, clip_length=15):
         output_file: string where to write the chorus (wav only)
             None means don't write anything
         clip_length: minimum length in seconds of the chorus
+        top_n: Number of choruses to return
 
-    Returns: Time in seconds of the start of the best chorus
+    Returns: Time in seconds of the start of the best choruses as a list (e.g.: [45.21, 89.37, 132.52])
     """
     chroma, song_wav_data, sr, song_length_sec = create_chroma(input_file)
-    chorus_start = find_chorus(chroma, sr, song_length_sec, clip_length)
-    if chorus_start is None:
-        return
+    chorus_starts = find_chorus(chroma, sr, song_length_sec, clip_length, top_n=top_n)
+    if not chorus_starts:
+        return []
+    
+    for i, chorus_start in enumerate(chorus_starts):
+        print("Chorus {} found at {:0.0f} min {:.2f} sec".format(
+            i+1, chorus_start // 60, chorus_start % 60))
 
-    print("Best chorus found at {0:g} min {1:.2f} sec".format(
-        chorus_start // 60, chorus_start % 60))
+        if output_file is not None and i == 0:
+            chorus_wave_data = song_wav_data[int(chorus_start*sr) : int((chorus_start+clip_length)*sr)]
+            sf.write(output_file, chorus_wave_data, sr)
 
-    if output_file is not None:
-        chorus_wave_data = song_wav_data[int(chorus_start*sr) : int((chorus_start+clip_length)*sr)]
-        sf.write(output_file, chorus_wave_data, sr)
-        #librosa.output.write_wav(output_file, chorus_wave_data, sr)
-
-    return chorus_start
+    return chorus_starts
