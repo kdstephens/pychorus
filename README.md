@@ -45,6 +45,8 @@ time_lag_similarity.display()
 ## Planned improvements for v0.2
 * Detect choruses in music recorded without a metronome by looking for slightly crooked lines
 * API to return all choruses, not just one with the most matches
+  * UPDATE (2025/07/11): Updated `find_chorus` (and also `find_and_output_chorus`) to return a list with the start secs for each of the top n choruses instead of only the top chorus. See `test_chorus_local.py` for example usage. You can also run this file from command line: 
+  `python test_chorus_local.py`
 * Add ability to output entire detected chorus, not just section of size clip_length
 
 ## License
